@@ -1,0 +1,26 @@
+name: Build Android APK
+on: [push, workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.22'
+    - name: Install Fyne dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install gcc libgl1-mesa-dev xorg-dev
+    - name: Build APK using Fyne Cross
+      uses: fyne-io/fyne-cross-action@v2
+      with:
+        targets: 'android'
+        app-id: 'com.ocean.checker'
+        name: 'Hot-Ocean'
+    - name: Upload APK Artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: Hot-Ocean-APK
+        path: fyne-cross/bin/android/Hot-Ocean.apk
