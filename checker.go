@@ -2196,7 +2196,7 @@ func printBanner() {
 // MAIN
 // ─────────────────────────────────────────────────────────────────────────────
 
-func main() {
+func main_old() {
 	openBrowser("https://t.me/DenxPortal")
 	printBanner()
 
