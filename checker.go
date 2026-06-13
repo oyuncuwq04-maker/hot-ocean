@@ -340,6 +340,7 @@ type Checker struct {
 	Mode     int
 	Proxy    string
 	LogCb    func(string)
+	Transport *http.Transport
 }
 
 func NewChecker(keywords []string, debug bool, mode int) *Checker {
@@ -379,20 +380,22 @@ func (c *Checker) dbgFail(msg string) {
 // ── STEP: Auth (Microsoft Mobile OAuth) ───────────────────────────────────────
 func (c *Checker) doAuth(email, password string) (*authSession, error) {
 	jar, _ := cookiejar.New(nil)
-	transport := &http.Transport{}
-	if c.Proxy != "" {
-		if pURL, err := url.Parse(c.Proxy); err == nil {
-			transport.Proxy = http.ProxyURL(pURL)
-		}
-	}
-	client := &http.Client{Timeout: 20 * time.Second, Jar: jar, Transport: transport}
 	
-	noRedirTransport := &http.Transport{}
+	var baseTransport *http.Transport
+	if c.Transport != nil {
+		baseTransport = c.Transport.Clone()
+	} else {
+		baseTransport = &http.Transport{}
+	}
+
 	if c.Proxy != "" {
 		if pURL, err := url.Parse(c.Proxy); err == nil {
-			noRedirTransport.Proxy = http.ProxyURL(pURL)
+			baseTransport.Proxy = http.ProxyURL(pURL)
 		}
 	}
+	client := &http.Client{Timeout: 20 * time.Second, Jar: jar, Transport: baseTransport}
+	
+	noRedirTransport := baseTransport.Clone()
 	noRedir := &http.Client{
 		Timeout: 20 * time.Second,
 		Jar:     jar,
